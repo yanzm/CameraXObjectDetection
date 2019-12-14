@@ -16,33 +16,25 @@
 
 package net.yanzm.cameraxobjectdetection
 
+import android.annotation.SuppressLint
 import android.media.Image
-import androidx.annotation.GuardedBy
+import androidx.annotation.NonNull
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
+import com.google.android.gms.tasks.Tasks
 import com.google.firebase.ml.vision.FirebaseVision
 import com.google.firebase.ml.vision.common.FirebaseVisionImage
 import com.google.firebase.ml.vision.common.FirebaseVisionImageMetadata
 import com.google.firebase.ml.vision.objects.FirebaseVisionObject
 import com.google.firebase.ml.vision.objects.FirebaseVisionObjectDetector
 import com.google.firebase.ml.vision.objects.FirebaseVisionObjectDetectorOptions
+import java.util.concurrent.TimeUnit
 
-class ObjectDetectionAnalyzer(private val overlay: GraphicOverlay) : ImageAnalysis.Analyzer {
-
-    @GuardedBy("this")
-    private var processingImage: Image? = null
+class ObjectDetectionAnalyzer(
+    private val listener: (detectedObjects: DetectedObjects) -> Unit
+) : ImageAnalysis.Analyzer {
 
     private val detector: FirebaseVisionObjectDetector
-
-    @GuardedBy("this")
-    @FirebaseVisionImageMetadata.Rotation
-    var rotation = FirebaseVisionImageMetadata.ROTATION_90
-
-    @GuardedBy("this")
-    var scaledWidth = 0
-
-    @GuardedBy("this")
-    var scaledHeight = 0
 
     init {
         val options = FirebaseVisionObjectDetectorOptions.Builder()
@@ -53,73 +45,72 @@ class ObjectDetectionAnalyzer(private val overlay: GraphicOverlay) : ImageAnalys
         detector = FirebaseVision.getInstance().getOnDeviceObjectDetector(options)
     }
 
+    @SuppressLint("UnsafeExperimentalUsageError")
     override fun analyze(imageProxy: ImageProxy, rotationDegrees: Int) {
-        val image = imageProxy.image ?: return
-
+        val processingImage = imageProxy.image
         if (processingImage == null) {
-            processingImage = image
-            processLatestFrame()
+            imageProxy.close()
+            return
         }
+
+        val rotation = when (rotationDegrees) {
+            0 -> FirebaseVisionImageMetadata.ROTATION_0
+            90 -> FirebaseVisionImageMetadata.ROTATION_90
+            180 -> FirebaseVisionImageMetadata.ROTATION_180
+            270 -> FirebaseVisionImageMetadata.ROTATION_270
+            else -> FirebaseVisionImageMetadata.ROTATION_0
+        }
+
+        val image = FirebaseVisionImage.fromMediaImage(processingImage, rotation)
+
+        try {
+            val results = Tasks.await(detector.processImage(image), 1, TimeUnit.SECONDS)
+
+            debugPrint(results)
+
+            listener(DetectedObjects(rotationDegrees, processingImage, results))
+
+        } catch (e: Exception) {
+            println("failure : $e")
+        }
+
+        imageProxy.close()
     }
 
-    @Synchronized
-    private fun processLatestFrame() {
-        val processingImage = processingImage
-        if (processingImage != null) {
-            val image = FirebaseVisionImage.fromMediaImage(
-                processingImage,
-                rotation
-            )
+    private fun debugPrint(visionObjects: List<FirebaseVisionObject>) {
+        for ((idx, obj) in visionObjects.withIndex()) {
+            val box = obj.boundingBox
 
-            when (rotation) {
-                FirebaseVisionImageMetadata.ROTATION_0,
-                FirebaseVisionImageMetadata.ROTATION_180 -> {
-                    overlay.setSize(
-                        processingImage.width,
-                        processingImage.height,
-                        scaledHeight,
-                        scaledWidth
-                    )
-                }
-                FirebaseVisionImageMetadata.ROTATION_90,
-                FirebaseVisionImageMetadata.ROTATION_270 -> {
-                    overlay.setSize(
-                        processingImage.height,
-                        processingImage.width,
-                        scaledWidth,
-                        scaledHeight
-                    )
-                }
+            println("Detected object: $idx")
+            println("  Category: ${categoryNames[obj.classificationCategory]}")
+            println("  trackingId: ${obj.trackingId}")
+            println("  boundingBox: (${box.left}, ${box.top}) - (${box.right},${box.bottom})")
+            if (obj.classificationCategory != FirebaseVisionObject.CATEGORY_UNKNOWN) {
+                val confidence: Int = obj.classificationConfidence!!.times(100).toInt()
+                println("  Confidence: $confidence%")
             }
+        }
+    }
+}
 
-            detector.processImage(image)
-                .addOnSuccessListener { results ->
-                    debugPrint(results)
+class DetectedObjects(
+    rotationDegrees: Int,
+    @NonNull image: Image,
+    val objects: List<FirebaseVisionObject>
+) {
+    val imageWidth: Int
+    val imageHeight: Int
 
-                    overlay.clear()
-
-                    for (obj in results) {
-                        val box = obj.boundingBox
-
-                        val name = "${categoryNames[obj.classificationCategory]}"
-
-                        val confidence =
-                            if (obj.classificationCategory != FirebaseVisionObject.CATEGORY_UNKNOWN) {
-                                val confidence: Int =
-                                    obj.classificationConfidence!!.times(100).toInt()
-                                " $confidence%"
-                            } else ""
-
-                        overlay.add(BoxData("$name$confidence", box))
-                    }
-
-                    this.processingImage = null
-                }
-                .addOnFailureListener {
-                    println("failure")
-
-                    this.processingImage = null
-                }
+    init {
+        when (rotationDegrees) {
+            90, 270 -> {
+                imageWidth = image.height
+                imageHeight = image.width
+            }
+            else -> {
+                imageWidth = image.width
+                imageHeight = image.height
+            }
         }
     }
 }
@@ -132,19 +123,3 @@ val categoryNames: Map<Int, String> = mapOf(
     FirebaseVisionObject.CATEGORY_PLACE to "Place",
     FirebaseVisionObject.CATEGORY_PLANT to "Plant"
 )
-
-private fun debugPrint(visionObjects: List<FirebaseVisionObject>) {
-    for ((idx, obj) in visionObjects.withIndex()) {
-        val box = obj.boundingBox
-
-        println("Detected object: $idx")
-        println("  Category: ${categoryNames[obj.classificationCategory]}")
-        println("  trackingId: ${obj.trackingId}")
-        println("  entityId: ${obj.entityId}")
-        println("  boundingBox: (${box.left}, ${box.top}) - (${box.right},${box.bottom})")
-        if (obj.classificationCategory != FirebaseVisionObject.CATEGORY_UNKNOWN) {
-            val confidence: Int = obj.classificationConfidence!!.times(100).toInt()
-            println("  Confidence: $confidence%")
-        }
-    }
-}

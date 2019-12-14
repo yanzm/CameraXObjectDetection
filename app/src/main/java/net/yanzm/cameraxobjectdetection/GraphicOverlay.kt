@@ -27,7 +27,7 @@ import android.view.View
 
 data class BoxData(val text: String, val boundingBox: Rect)
 
-class GraphicOverlay(context: Context, attrs: AttributeSet) : View(context, attrs) {
+class GraphicOverlay(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
     private val lock = Any()
 
@@ -53,18 +53,29 @@ class GraphicOverlay(context: Context, attrs: AttributeSet) : View(context, attr
     private val offset = resources.displayMetrics.density * 8
     private val round = resources.displayMetrics.density * 4
 
-    private var xScale: Float = 1f
-    private var yScale: Float = 1f
+    private var scale: Float = 1f
 
-    private var xOffset: Float = 1f
-    private var yOffset: Float = 1f
+    private var xOffset: Float = 0f
+    private var yOffset: Float = 0f
 
-    fun setSize(targetWidth: Int, targetHeight: Int, scaledWidth: Int, scaledHeight: Int) {
-        xScale = scaledWidth / targetWidth.toFloat()
-        yScale = scaledHeight / targetHeight.toFloat()
+    fun setSize(imageWidth: Int, imageHeight: Int) {
 
-        xOffset = (scaledWidth - width) * 0.5f
-        yOffset = (scaledHeight - height) * 0.5f
+        val overlayRatio = width / height.toFloat()
+        val imageRatio = imageWidth / imageHeight.toFloat()
+
+        if (overlayRatio < imageRatio) {
+            // 同じ高さにしたとき overlay の方が 幅 が小さいので height に合わせる
+            scale = height / imageHeight.toFloat()
+
+            xOffset = (imageWidth * scale - width) * 0.5f
+            yOffset = 0f
+        } else {
+            // 同じ高さにしたとき overlay の方が 幅 が大きいので width に合わせる
+            scale = width / imageWidth.toFloat()
+
+            xOffset = 0f
+            yOffset = (imageHeight * scale - height) * 0.5f
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -73,10 +84,10 @@ class GraphicOverlay(context: Context, attrs: AttributeSet) : View(context, attr
         synchronized(lock) {
             for (graphic in graphics) {
                 rect.set(
-                    graphic.boundingBox.left * xScale,
-                    graphic.boundingBox.top * yScale,
-                    graphic.boundingBox.right * xScale,
-                    graphic.boundingBox.bottom * yScale
+                    graphic.boundingBox.left * scale,
+                    graphic.boundingBox.top * scale,
+                    graphic.boundingBox.right * scale,
+                    graphic.boundingBox.bottom * scale
                 )
 
                 rect.offset(-xOffset, -yOffset)
@@ -104,23 +115,12 @@ class GraphicOverlay(context: Context, attrs: AttributeSet) : View(context, attr
         }
     }
 
-    fun clear() {
+    fun set(list: List<BoxData>) {
         synchronized(lock) {
             graphics.clear()
-        }
-        postInvalidate()
-    }
-
-    fun add(boxData: BoxData) {
-        synchronized(lock) {
-            graphics.add(boxData)
-        }
-        postInvalidate()
-    }
-
-    fun remove(boxData: BoxData) {
-        synchronized(lock) {
-            graphics.remove(boxData)
+            for (boxData in list) {
+                graphics.add(boxData)
+            }
         }
         postInvalidate()
     }
