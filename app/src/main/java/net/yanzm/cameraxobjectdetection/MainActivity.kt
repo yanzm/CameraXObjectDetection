@@ -25,9 +25,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         if (savedInstanceState == null) {
-            supportFragmentManager.beginTransaction()
-                .replace(android.R.id.content, PermissionsFragment())
-                .commit()
+            moveToPermission()
         }
     }
 

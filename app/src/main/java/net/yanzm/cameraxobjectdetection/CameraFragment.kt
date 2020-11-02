@@ -23,13 +23,11 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.LensFacing
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.firebase.ml.vision.objects.FirebaseVisionObject
 import kotlinx.android.synthetic.main.fragment_camera.*
 import java.util.concurrent.Executors
 
@@ -66,29 +64,40 @@ class CameraFragment : Fragment() {
             .setTargetName("Preview")
             .build()
 
-        preview.previewSurfaceProvider = previewView.previewSurfaceProvider
-
         val cameraSelector = CameraSelector.Builder()
-            .requireLensFacing(LensFacing.BACK)
+            .requireLensFacing(CameraSelector.LENS_FACING_BACK)
             .build()
 
         val imageAnalysis = ImageAnalysis.Builder()
-            .setBackpressureStrategy(ImageAnalysis.BackpressureStrategy.KEEP_ONLY_LATEST)
+            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .build()
+
+        val analyzer = ObjectDetectionAnalyzer {
+            overlay?.post {
+                updateOverlay(it)
+            }
+        }
 
         imageAnalysis.setAnalyzer(
             Executors.newSingleThreadExecutor(),
-            ObjectDetectionAnalyzer {
-                overlay?.post {
-                    updateOverlay(it)
-                }
-            }
+            analyzer
         )
 
-        cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+        try {
+            cameraProvider.unbindAll()
+
+            cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis)
+
+            preview.setSurfaceProvider(previewView.surfaceProvider)
+        } catch (e: Exception) {
+        }
     }
 
     private fun updateOverlay(detectedObjects: DetectedObjects) {
+
+        if (overlay == null) {
+            return
+        }
 
         if (detectedObjects.objects.isEmpty()) {
             overlay.set(emptyList())
@@ -103,18 +112,14 @@ class CameraFragment : Fragment() {
 
             val box = obj.boundingBox
 
-            val name = "${categoryNames[obj.classificationCategory]}"
+            val label = obj.labels.joinToString { label ->
+                val confidence: Int = label.confidence.times(100).toInt()
+                "${label.text} $confidence%"
+            }
 
-            val confidence =
-                if (obj.classificationCategory != FirebaseVisionObject.CATEGORY_UNKNOWN) {
-                    val confidence: Int =
-                        obj.classificationConfidence!!.times(100).toInt()
-                    " $confidence%"
-                } else {
-                    ""
-                }
+            val text = if (label.isNotEmpty()) label else "unknown"
 
-            list.add(BoxData("$name$confidence", box))
+            list.add(BoxData(text, box))
         }
 
         overlay.set(list)
